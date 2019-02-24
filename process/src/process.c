@@ -14,10 +14,12 @@ struct struct_zone_data{
     unsigned long start;
     unsigned long end;
 };
-struct struct_zone_data zone_data[20];
+struct share_struct{
+    unsigned long sum;
+    pthread_mutex_t mutex;
+};
 
-unsigned long *sum = NULL;
-pthread_mutex_t mutex;
+struct struct_zone_data zone_data[20];
 
 int childCalculate(long N, long M){
     int process = 0;
@@ -34,17 +36,17 @@ int childCalculate(long N, long M){
             }
 
             // add local sum to sum
-            pthread_mutex_lock(&mutex);
-            int shmid = shmget((key_t)2333, 8, IPC_CREAT|0666);
+            int shmid = shmget((key_t)2333, sizeof(struct share_struct), IPC_CREAT|0666);
             void *p_addr = shmat(shmid, NULL, 0);
             if(p_addr == (void*)-1){
                 printf("connect shared memery fail\n");
                 exit(1);
             }
-            sum = (unsigned long*)p_addr;
-            *sum = *sum + local_sum;
+            struct share_struct *p_share = (struct share_struct *)p_addr;
+            pthread_mutex_lock(&(p_share->mutex));
+            p_share->sum += local_sum;
             //printf("add: %ld\nnow: %ld\n", local_sum, *sum);
-            pthread_mutex_unlock(&mutex);
+            pthread_mutex_unlock(&(p_share->mutex));
             exit(0);
         }else{
             // parents process
@@ -110,6 +112,18 @@ int main(int argc, char *argv[]){
         }
     }
 
+    // init lock and create shared memery
+    int shmid = shmget((key_t)2333, sizeof(struct share_struct), IPC_CREAT|0666);
+    void *p_addr = shmat(shmid, NULL, 0);
+    if(p_addr == (void*)-1){
+        printf("create shared memery fail\n");
+        exit(1);
+    }
+    struct share_struct *p_share = (struct share_struct *)p_addr;
+    p_share->sum = 0;
+    pthread_mutex_init(&(p_share->mutex), NULL);
+    
+
     pid_t pid = fork();
     if(pid < 0){
         printf("pid < 0 error!!\n");
@@ -120,16 +134,6 @@ int main(int argc, char *argv[]){
         exit(0);
     }else{
         //printf("parent process\n");
-        // init lock and create shared memery
-        pthread_mutex_init(&mutex, NULL);
-        int shmid = shmget((key_t)2333, 8, IPC_CREAT|0666);
-        void *p_addr = shmat(shmid, NULL, 0);
-        if(p_addr == (void*)-1){
-            printf("create shared memery fail\n");
-            exit(1);
-        }
-        sum = (unsigned long*)p_addr;
-
         // wait child process exit
         waitpid(pid, NULL, 0);
         printf("child is exit\n");
@@ -138,7 +142,7 @@ int main(int argc, char *argv[]){
         gettimeofday(&tv, NULL);
         long end = tv.tv_sec*1000000 + tv.tv_usec;
         printf("time use: %ld\n", end - start);
-        printf("result:%ld\n", *sum);
+        printf("result:%ld\n", p_share->sum);
         if(argc < 2){
             printf("output file: %s\n", OUTPUT_PATH);
             fp = fopen(OUTPUT_PATH, "w+");
@@ -146,11 +150,11 @@ int main(int argc, char *argv[]){
             printf("output file: %s\n", argv[2]);
             fp = fopen(argv[2], "w+");
         }
-        fprintf(fp, "%ld", *sum);
+        fprintf(fp, "%ld", p_share->sum);
         fclose(fp);
 
         // destory share memery
-        shmdt(sum);
+        shmdt(p_addr);
         shmctl(shmid, IPC_RMID, NULL);
     }
     
